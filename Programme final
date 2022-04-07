@@ -1,0 +1,267 @@
+# On importe les différentes bibliothèque nécessaires.
+import cv2 # OpenCV
+from flask import Flask, render_template, render_template_string, Response # Gestion du flux vidéo sur une page WEB
+import RPi.GPIO as GPIO # Commander les pins de la Raspberry
+import time
+import bluetooth # Utilisation du Bluetooth
+import threading # Utilisation de Thread
+
+#Connexion à l'appareil distant :
+server_socket=bluetooth.BluetoothSocket( bluetooth.RFCOMM )
+port = 1
+server_socket.bind(("",port))
+server_socket.listen(1)
+client_socket,address = server_socket.accept()
+print("Accepted connection from ",address)
+d = client_socket.recv(1024)
+f=d.decode("utf-16")
+g = f[2:]
+
+
+# Creation d'un thread pour gérer le flux et le traitement d'image de manière independante
+def even():
+    app = Flask(__name__)
+    video_capture = cv2.VideoCapture(0)
+
+    dirCascadeFiles_face = r'/home/pi/test/Traitement/haarcascades_cuda/haarcascade_frontalface_default.xml'
+    dirCascadeFiles_eyes = r'/home/pi/test/Traitement/haarcascades_cuda/haarcascade_eye.xml'
+
+    classCascadefacial = cv2.CascadeClassifier(dirCascadeFiles_face)
+    classCascadeEyes = cv2.CascadeClassifier(dirCascadeFiles_eyes)
+    def facialDetectionAndMark(_image, _classCascade):
+        imgreturn = _image.copy()
+        gray = cv2.cvtColor(imgreturn, cv2.COLOR_BGR2GRAY)
+        faces = _classCascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(30, 30),
+            flags=cv2.CASCADE_SCALE_IMAGE
+        )
+        for (x, y, w, h) in faces:
+            cv2.rectangle(imgreturn, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        return imgreturn
+
+    def gen():
+        V=0
+        L=0
+        R=0
+        while True:
+            ret, image = video_capture.read()
+            if g == "Visage":
+                print("visage")
+                face = facialDetectionAndMark(image,classCascadefacial)
+                cv2.imwrite('t.jpg', face)
+                V = 1
+            if g == "loeuil":
+                print("l'oeuil")
+                face = facialDetectionAndMark(image,classCascadeEyes)
+                cv2.imwrite('t.jpg', face)
+                L = 1
+                
+            if g == "RiendeRien":
+                print("else")
+                cv2.imwrite('t.jpg', image)
+                R = 1
+                
+            if (V == 1):
+                face = facialDetectionAndMark(image,classCascadefacial)
+                cv2.imwrite('t.jpg', face)
+                
+            if (L == 1):
+                face = facialDetectionAndMark(image,classCascadeEyes)
+                cv2.imwrite('t.jpg', face)
+            
+            if (R == 1):
+                cv2.imwrite('t.jpg', image)
+                
+                
+
+            yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + open('t.jpg', 'rb').read() + b'\r\n')
+        video_capture.release()
+        
+        
+
+
+    @app.route('/')
+    def index():
+        """Video streaming"""
+        #return render_template('index.html')
+        return render_template_string('''<html>
+      <head>
+        <title>Video Streaming Demonstration</title>
+      </head>
+      <body>
+        <h1>Video Streaming Demonstration</h1>
+        <img src="{{ url_for('video_feed') }}">
+      </body>
+    </html>''')
+
+    @app.route('/video_feed')
+    def video_feed():
+        """Video streaming route. Put this in the src attribute of an img tag."""
+        return Response(gen(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+                    
+
+
+    if __name__ == '__main__':
+        app.run(host='0.0.0.0')
+
+trd1 = threading.Thread(target=even)   
+trd1.start() # Lancement du thread
+
+#Mise en place du moteur 1 GAUCHE
+servoPIN1 = 16
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(servoPIN1, GPIO.OUT)
+
+#Mise en place moteur 2 DROITE
+servoPIN2 = 20
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(servoPIN2, GPIO.OUT)
+
+#Mise en place moteur 3 GAUCHE
+servoPIN3 = 21
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(servoPIN3, GPIO.OUT)
+
+#Mise en place moteur 4 DROITE
+servoPIN4 = 12
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(servoPIN4, GPIO.OUT)
+
+#Configuration des commandes
+arriere_gauche = GPIO.PWM(servoPIN1, 300)
+arriere_droit = GPIO.PWM(servoPIN2, 300)
+avant_gauche = GPIO.PWM(servoPIN3, 300)
+avant_droit = GPIO.PWM(servoPIN4, 300)
+
+#Initialisation des commandes
+arriere_gauche.start(0)
+arriere_droit.start(0)
+avant_gauche.start(0)
+avant_droit.start(0)
+
+# Definition des fonctions de deplacements du robot
+
+def avancer():
+    arriere_gauche.ChangeDutyCycle(20)
+    arriere_droit.ChangeDutyCycle(65)
+    avant_gauche.ChangeDutyCycle(20)
+    avant_droit.ChangeDutyCycle(65)
+
+def reculer():
+    arriere_gauche.ChangeDutyCycle(65)
+    arriere_droit.ChangeDutyCycle(20)
+    avant_gauche.ChangeDutyCycle(65)
+    avant_droit.ChangeDutyCycle(20)
+
+def droite():
+    arriere_gauche.ChangeDutyCycle(20)
+    arriere_droit.ChangeDutyCycle(20)
+    avant_gauche.ChangeDutyCycle(65)
+    avant_droit.ChangeDutyCycle(65)
+
+def gauche():
+    arriere_gauche.ChangeDutyCycle(65)
+    arriere_droit.ChangeDutyCycle(65)
+    avant_gauche.ChangeDutyCycle(20)
+    avant_droit.ChangeDutyCycle(20)
+    
+def av_droite():
+    arriere_gauche.ChangeDutyCycle(0)
+    arriere_droit.ChangeDutyCycle(65)
+    avant_gauche.ChangeDutyCycle(20)
+    avant_droit.ChangeDutyCycle(0)
+    
+def av_gauche():
+    arriere_gauche.ChangeDutyCycle(20)
+    arriere_droit.ChangeDutyCycle(0)
+    avant_gauche.ChangeDutyCycle(0)
+    avant_droit.ChangeDutyCycle(65)
+
+def arret():
+    arriere_gauche.ChangeDutyCycle(0)
+    arriere_droit.ChangeDutyCycle(0)
+    avant_gauche.ChangeDutyCycle(0)
+    avant_droit.ChangeDutyCycle(0)
+    
+# Boucle infinie permettant le controle par bluetooth du robot
+ 
+while 1:
+    d = client_socket.recv(1024)
+    f=d.decode("utf-16")
+    g = f[2:]
+    print(g)
+    if (g=="AVANT"):
+        print(g)
+        print("AVANCER")
+        droite()
+        time.sleep(0.1)
+        f=""
+        g=""
+
+    if (g=="ARIERE "):
+        print("RECULER")
+        gauche()
+        time.sleep(0.1)
+        f=""
+        g=""
+
+    elif (g=="DROITE"):
+        print("DROITE")
+        avancer()
+        time.sleep(0.1)
+        f=""
+        g=""
+
+    elif (g=="GAUCHE"):
+        print("GAUCHE")
+        reculer()
+        time.sleep(0.1)
+        f=""
+        g=""
+        
+    elif (g=="AVDROITE"):
+        print("AVDROITE")
+        av_droite()
+        time.sleep(0.1)
+        f=""
+        g=""
+        
+    elif (g=="AVGAUCHE"):
+        print("AVGAUCHE")
+        av_gauche()
+        time.sleep(0.1)
+        f=""
+        g=""
+    elif (g=="ARRET"):
+        print("ARRET")
+        arret()
+        time.sleep(0.1)
+        f=""
+        g=""
+
+  
+
+GPIO.cleanup()        
+        
+
+
+
+        
+            
+        
+ 
+
+
+
+
+
+
+
+     
+      
+
